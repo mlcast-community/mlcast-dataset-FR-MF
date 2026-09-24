@@ -14,6 +14,11 @@ from fire import Fire
 
 ### Global variables ###
 
+# Version of this conversion code, recorded in the ``mlcast_created_with``
+# global attribute. Bump together with the git tag.
+CODE_VERSION = "0.1.1"
+CREATED_WITH_URL = "https://github.com/mlcast-community/mlcast-dataset-FR-MF@{version}"
+
 # Original radar projection
 PROJ_WKT_V1 = """
 PROJCS["unknown",GEOGCS["unknown",DATUM["unknown",SPHEROID["unknown",6378137,298.252840776245]],
@@ -197,13 +202,19 @@ def get_spatial_coords_attrs():
             "dimension_names": [
                 "y"
             ],
-            "units": "m"
+            "standard_name": "projection_y_coordinate",
+            "long_name": "y coordinate of projection",
+            "units": "m",
+            "axis": "Y"
         }, 
         "x": {
             "dimension_names": [
                 "x"
             ],
-            "units": "m"
+            "standard_name": "projection_x_coordinate",
+            "long_name": "x coordinate of projection",
+            "units": "m",
+            "axis": "X"
         }, 
         "lat": {
             "dimension_names": [
@@ -259,11 +270,22 @@ def get_missing_time_attrs():
 def get_georeferencing_attrs():
     """
     Build the georeferencing information attribute structure.
+
+    Besides the WKT / PROJ strings, the grid mapping variable carries the CF
+    grid mapping attributes (``grid_mapping_name`` plus the projection
+    parameters, CF conventions section 5.6 and appendix F). They are derived
+    from the WKT with pyproj so the two descriptions cannot drift apart.
     """
-    attrs = {  
+    cf_attrs = CRS.from_wkt(PROJ_WKT_V2).to_cf()
+    cf_attrs.pop("crs_wkt")  # keep the hand-written WKT (with BBOX) below
+    # CF requires the pole for polar_stereographic; pyproj leaves it out when
+    # the projection is defined through a standard parallel.
+    cf_attrs["latitude_of_projection_origin"] = 90.0
+    attrs = {
+        **cf_attrs,
         "proj4": PROJ4,
-        "crs_wkt": PROJ_WKT_V2,
-        "spatial_ref": PROJ_WKT_V2,
+        "crs_wkt": PROJ_WKT_V2.strip(),
+        "spatial_ref": PROJ_WKT_V2.strip(),
     }
     return attrs
 
@@ -285,25 +307,29 @@ def get_rainrate_attrs():
         }
     return attrs
 
-def get_global_attrs():
+def get_global_attrs(created_with_version: str = CODE_VERSION):
     """
-    Build the global attribures structure.
+    Build the global attributes structure.
+
+    Args:
+        created_with_version: (str) git revision of this code (tag, branch or
+            commit) recorded in ``mlcast_created_with``.
     """
     attrs = {
         "Author": "Météo-France",
         "Copyright": "Météo-France",
-        "Processed by": "WebValley2026",
+        "Processed by": "WebValley2026, Fondazione Bruno Kessler",
         "base_frequencies": "5min:2020-01-01T00:00/2024-12-31T23:55",
         "consistent_timestep_start": "2020-01-01T00:00",
         "coordinates": "lat lon",
         "history": "Created at 2026-06-29T19:00:00+01:00",
         "license": "CC-BY-4.0", #"etalab-2.0"
-        "mlcast_created_by": "WebValley2026 <webvalley@fbk.eu>",
+        "mlcast_created_by": "WebValley2026, Fondazione Bruno Kessler, <webvalley@fbk.eu>",
         "mlcast_created_on": "2026-06-29T19:00:00+01:00",
-        #"mlcast_created_with": "https://github.com/mlcast-community/mlcast-dataset-IT-DPC-SRI@0.2.0",
-        "mlcast_dataset_identifier": "FR-MF-RR",
+        "mlcast_created_with": CREATED_WITH_URL.format(version=created_with_version),
+        "mlcast_dataset_identifier": "FR-MF-prate",
         "mlcast_dataset_version": "0.1.0",
-        "title": "MétéoFrance Radar Rainfall Archive"
+        "title": "Météo-France Radar Rainfall Archive"
     }
     return attrs
 

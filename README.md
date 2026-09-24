@@ -1,4 +1,4 @@
-# mlcast-dataset-FR-MR-prate
+# mlcast-dataset-FR-MF
 
 This dataset contains radar data of the rainfall intensity throughout France from 2020-2024 (included). The radar recorded data every 5 minutes covering a grid of 1536 x 1536 pixels with a spatial resolution of 1 km. 
 The data was originally stored in `.npz` format, which were converted into `.zarr`.
@@ -91,6 +91,29 @@ uv run python scripts/zarr_converter.py \
 | `num_workers` | 4 | amount of parallel workers |
 
 
+
+## 5. Patching attributes of an existing archive
+
+The attributes of an archive that already exists (locally or on S3) can be
+rewritten in place, without touching the data chunks, with:
+
+```bash
+uv run python scripts/zarr_attribute_editor.py \
+    --zarr_path s3://mlcast-source-datasets/FR-MF-prate/v0.1.0/fr-mf-prate-5min.zarr \
+    --profile ewc-eai-mlcast \
+    --endpoint_url https://object-store.os-api.cci2.ecmwf.int \
+    --created_with_version 0.1.1
+```
+
+It takes the global, `crs`, `x` and `y` attributes from the same builders used
+by `zarr_init.py`, so the two scripts cannot drift apart, and re-consolidates
+the metadata. Add `--dry_run` to print the attributes without writing.
+
+**Georeferencing.** The `crs` variable carries the WKT and PROJ strings as
+well as the CF grid mapping attributes (`grid_mapping_name` and the
+`polar_stereographic` parameters), which are derived from the WKT with pyproj.
+The `x` / `y` coordinates carry the CF `standard_name`, `units` and `axis`
+attributes.
 
 ## Acknowledgements
 
