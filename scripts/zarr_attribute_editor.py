@@ -1,95 +1,96 @@
+"""
+Patch the attributes of an existing FR-MF zarr archive in place.
+
+Rewrites the global, ``crs``, ``x`` and ``y`` attributes from the builders in
+``zarr_init`` (the single source of truth) and re-consolidates the metadata.
+Data chunks are never touched, so this is cheap to run on the published
+archive on S3 as well as on a local copy.
+
+Example (local):
+    uv run python scripts/zarr_attribute_editor.py --zarr_path /data/fr-mf-prate-5min.zarr
+
+Example (S3, credentials from an AWS profile):
+    uv run python scripts/zarr_attribute_editor.py \\
+        --zarr_path s3://mlcast-source-datasets/FR-MF-prate/v0.1.0/fr-mf-prate-5min.zarr \\
+        --profile ewc-eai-mlcast \\
+        --endpoint_url https://object-store.os-api.cci2.ecmwf.int \\
+        --created_with_version 0.1.1
+"""
+
+import json
 import os
+
 import zarr
-from typing import Dict
+from zarr.storage import FsspecStore, LocalStore
 from loguru import logger
 from fire import Fire
 
-# Correct WKT 
-PROJ_WKT_V2 = """
-PROJCS["unknown",
-    GEOGCS["unknown",
-        DATUM["unknown",
-            SPHEROID["unknown",6378137,298.252840776245]],
-        PRIMEM["Greenwich",0],
-        UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]]],
-    PROJECTION["Polar_Stereographic"],
-    PARAMETER["latitude_of_origin",45],
-    PARAMETER["central_meridian",0],
-    PARAMETER["false_easting",0],
-    PARAMETER["false_northing",0],
-    UNIT["metre",1],
-    AXIS["Easting",SOUTH],
-    AXIS["Northing",SOUTH],
-    USAGE[
-        SCOPE["Engineering survey, topographic mapping."],
-        AREA["Europe - between 39.48°N and 54.18°N; -9.96°E and 14.55°E."],
-        BBOX[39.477880507122855, -9.964999999999996, 54.18403098825441, 14.54948729204824]
-    ]
-]
-"""
-# Proj conversion
-PROJ4 = "+proj=stere +lat_0=90 +lat_ts=45 +lon_0=0 +x_0=0 +y_0=0 +a=6378137 +rf=298.252840776245 +units=m +no_defs +type=crs"
+from zarr_init import (
+    CODE_VERSION,
+    get_georeferencing_attrs,
+    get_global_attrs,
+    get_spatial_coords_attrs,
+)
 
 
-def get_global_attrs():
+def open_store(zarr_path: str, profile: str | None, endpoint_url: str | None):
     """
-    Build the global attribures structure.
+    Open a local path or an ``s3://`` URL as a writable zarr store.
     """
-    attrs = {
-        "Author": "Météo-France",
-        "Copyright": "Météo-France",
-        "Processed by": "WebValley2026, Fondazione Bruno Kessler",
-        "base_frequencies": "5min:2020-01-01T00:00/2024-12-31T23:55",
-        "consistent_timestep_start": "2020-01-01T00:00",
-        "coordinates": "lat lon",
-        "history": "Created at 2026-06-29T19:00:00+01:00",
-        "license": "CC-BY-4.0", #"etalab-2.0"
-        "mlcast_created_by": "WebValley2026, Fondazione Bruno Kessler, <webvalley@fbk.eu>",
-        "mlcast_created_on": "2026-06-29T19:00:00+01:00",
-        "mlcast_created_with": "https://github.com/mlcast-community/mlcast-dataset-FR-MR@0.1.0",
-        "mlcast_dataset_identifier": "FR-MF-prate",
-        "mlcast_dataset_version": "0.1.0",
-        "title": "Météo-France Radar Rainfall Archive"
-    }
-    return attrs
-
-
-def get_georeferencing_attrs():
-    """
-    Build the georeferencing information attribute structure.
-    """
-    attrs = {  
-        "proj4": PROJ4,
-        "crs_wkt": PROJ_WKT_V2,
-        "spatial_ref": PROJ_WKT_V2,
-    }
-    return attrs
-
-
-def main(zarr_path: str) -> None:
-    """
-    Manual zarr attribute editing.
-    """
+    if zarr_path.startswith("s3://"):
+        storage_options = {}
+        if profile:
+            storage_options["profile"] = profile
+        if endpoint_url:
+            storage_options["endpoint_url"] = endpoint_url
+        return FsspecStore.from_url(zarr_path.rstrip("/"), storage_options=storage_options)
     if not os.path.exists(zarr_path):
         raise NameError(f"Zarr archive {zarr_path} does not exist.")
-    
-    # Open zarr
-    logger.info("Reading data.")
-    root = zarr.open(zarr_path, mode="a")
+    return LocalStore(zarr_path)
 
-    # Update global
-    logger.info("Updating global attrs.")
-    updated_global = get_global_attrs()
-    root.attrs.update(updated_global)
 
-    # Update crs
-    logger.info("Updating crs attrs.")
-    updated_crs = get_georeferencing_attrs()
-    root["crs"].attrs.update(updated_crs)
+def main(
+        zarr_path: str,
+        profile: str | None = None,
+        endpoint_url: str | None = None,
+        created_with_version: str = CODE_VERSION,
+        dry_run: bool = False,
+    ) -> None:
+    """
+    Update the attributes of an existing zarr archive and re-consolidate.
 
-    # Consolidate metadata
-    logger.info("Consolidate metadata.")
-    zarr.consolidate_metadata(zarr_path, zarr_format=3)
+    Args:
+        zarr_path: (str) local path or ``s3://bucket/path.zarr`` URL.
+        profile: (str) AWS profile name providing the S3 credentials.
+        endpoint_url: (str) S3 endpoint URL (e.g. the EWC object store).
+        created_with_version: (str) git revision (tag, branch or commit) of
+            this code, recorded in ``mlcast_created_with``.
+        dry_run: (bool) only print the attributes that would be written.
+    """
+    updates = {
+        "": get_global_attrs(created_with_version),
+        "crs": get_georeferencing_attrs(),
+        "x": get_spatial_coords_attrs()["x"],
+        "y": get_spatial_coords_attrs()["y"],
+    }
+    if dry_run:
+        logger.info("Dry run, attributes that would be written:")
+        print(json.dumps(updates, indent=2, ensure_ascii=False))
+        return
 
-if __name__=="__main__":
+    logger.info(f"Opening {zarr_path}")
+    store = open_store(zarr_path, profile, endpoint_url)
+    root = zarr.open_group(store, mode="r+", use_consolidated=False)
+
+    for name, attrs in updates.items():
+        node = root if name == "" else root[name]
+        logger.info(f"Updating attrs of {name or 'root'} ({len(attrs)} keys)")
+        node.attrs.update(attrs)
+
+    logger.info("Consolidating metadata.")
+    zarr.consolidate_metadata(store, zarr_format=3)
+    logger.info("Done.")
+
+
+if __name__ == "__main__":
     Fire(main)
